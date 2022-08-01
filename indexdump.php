@@ -5,14 +5,18 @@ Works like 'mysqldump' but for indexes in Manticore/Sphinx
 
 ... useful in theory for a logical backup of a ManticoreSearch or SphinxSearch Index. Most useful for RT indexes, but can in theory dump stored fields and attributes from even plain indexes.
 
-Known Limiations
+Known Limiations:
 * Multibyte (UTF8 etc!) hasn't been tested!?
 * doesn't deal propelly with locks, collations, timezones and version compatiblity etc
+* it CAN issue lock/unlock commands (added in mantiore 5), but such locks are only safe for physical backup, they do NOT prevent writes to the index, so might still get 'dirty' data in a logical backup
 * can only dump ONE index at a time!
 * does not support either extended or complete inserts (like mysqldump does), nor 'replace into'
 * creating fake a 'CREATE TABLE' command for the index is rudimentry. does not correctly deal with all combinations
 * if specing a limit to only dump some rows, then must be <=1000 (max_matches!), larger values doesn't work yet
-* NOT tested with percolate indexes
+* NOT tested with percolate indexes (but I think should dump the 'data' ok, but possiblt not the schema!)
+
+See also:
+Node.js version of the same thing: https://www.npmjs.com/package/indexdump
 
 ***********************************************
 
@@ -92,7 +96,7 @@ if (count($argv) > 1) {
 } else {
 	die("
 Usage:
-php indexdump.php [-hhost] [-uuser] [-ppass] [query] [table] [limit] [--data=0] [--schema=0] [--lock=1]
+php indexdump.php [-hhost] [query] [table] [limit] [--data=0] [--schema=0] [--lock=1]
 
 Examples:
 php indexdump.php index 100
@@ -224,8 +228,11 @@ if ($p['schema'] === 'mysql') {
 	print "$create_table;\n\n";
 
 	if (!empty($fields)) { // stored fields show as type 'text' so not included here
-		print "-- WARNING: the index contains the following fields that where NOT stored, so not included in output:\n";
+		print "-- WARNING: the index contains the following fields that where NOT stored (only indexed), so not included in output:\n";
 		print "--  ".implode(', ',array_keys($fields))."\n";
+
+		fwrite(STDERR, "-- WARNING: the index contains the following fields that where NOT stored (only indexed), so not included in output:" . PHP_EOL);
+		fwrite(STDERR, "--  ".implode(', ',array_keys($fields)). PHP_EOL);
 	}
 }
 
