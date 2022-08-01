@@ -81,12 +81,21 @@ You instead create the index manually (either with CREATE TABLE or directly in s
 
 ## Requirements
 
-PHP - 5+ probably, but tested with 7.3
-php-mysqli - for connecting to the searchd server
+* PHP - 5+ probably, but tested with 7.3
 
-A running searchd instance, either Sphinx or Manticore. In general should work with anything 2.x or above, but will work best with 3.x+ where the 
+* php-mysqli - for connecting to the searchd server
+
+* A running searchd instance, either Sphinx or Manticore. In general should work with anything 2.x or above, but will work best with 3.x+ where the 
 fields are stored with docstore.
+... tested mostly with Manticore 3.6
 
 ## See other
 
-A node.js version is at https://github.com/webigorkiev/indexdump/
+A node.js version is at https://github.com/webigorkiev/indexdump
+... in particular has a --all option to dump all indexes. 
+
+This script was originally based on code from https://github.com/barryhunter/fakedump
+... which works in similar way just against a mysql database server.
+
+Also if looking for a physical backup, see the node.js tool, https://github.com/webigorkiev/indexbackup
+... manticoresearch are also working on their own physical backup script. 
