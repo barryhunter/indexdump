@@ -15,6 +15,9 @@ In general a physical backup of the index files, is quicker (both to take copy a
 These 'dumps' only read access to the sphinxQL/manticoreQL port, but can be quite slow particully for large indexes. 
 
 
+* bonus feature: it can create a fake mysql schema for the index (actully what inspired me to create this) - so can recreate a mysql database table using data from a RT index in the search server. 
+
+
 ## Known Limitations
 
 * It does NOT dump fields that are not stored (limition of searchd, not this script) 
@@ -59,6 +62,8 @@ Examples:
     NOTE:  then must be <=1000 (max_matches!), larger values doesn't work yet
 
 * [--data=0] [--schema=0] can optionally turn off dumping of data and/or schema seperatly
+
+* [--schema=mysql] creates a fake mysql compatible CREATE TABLE schema in the dump. In theory to be used to dump FROM searchd, and create a mysql table of the same data!
 
 * [--lock=1] when dumping, adds 'LOCK index' to lock the index in searchd. 
     Note that the LOCK command in manticoresearch, is a physical lock (prevents writes to teh file) it does NOT prevent other threads doing INSERT/DELETE/UPDATE etc) - so no garentee of index consistency in the dump
