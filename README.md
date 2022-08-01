@@ -9,32 +9,39 @@ modelled after 'mysqldump' - but downloads data from the search server not the d
 
 As well as dumping a 'SQL' dump file (on stdout) it can also dump the data to a .tsv file.
 
-**
+** Note script is creating a logical backup, of a single index. While usable for backups, its probably recommended to create a 'physical' backup of the index files from the server. 
+
+In general a physical backup of the index files, is quicker (both to take copy and to restore a copy!), but requires access to the filesystem on the server. 
+These 'dumps' only read access to the sphinxQL/manticoreQL port, but can be quite slow particully for large indexes. 
+
 
 ## Known Limitations
 
 * It does NOT dump fields that are not stored (limition of searchd, not this script) 
 
 * Multibyte (UTF8 etc!) hasn't been tested!?
-* doesn't deal propelly with locks, collations, timezones and version compatiblity etc
-* it CAN issue lock/unlock commands (added in mantiore 5), but such locks are only safe for physical backup, they do NOT prevent writes to the index, so might still get 'dirty' dat$
+* it CAN issue lock/unlock commands (added in manticore 5), but such locks are only safe for physical backup, they do NOT prevent writes to the index, so might still get 'dirty' data in dump
 * can only dump ONE index at a time!
 * does not support either extended or complete inserts (like mysqldump does), nor 'replace into'
-* creating fake a 'CREATE TABLE' command for the index is rudimentry. does not correctly deal with all combinations
+* creating fake a 'CREATE TABLE' command for the index is rudimentry. does not correctly deal with all combinations. (RT and Percolate indexes in a v3.6+ should have proper create table schema from the server, its onlt older versions or for plain indexes, need to create a 'fake' schema. )
 * if specing a limit to only dump some rows, then must be <=1000 (max_matches!), larger values doesn't work yet
-* NOT tested with percolate indexes (but I think should dump the 'data' ok, but possiblt not the schema!)
+* NOT tested with percolate indexes (but I think should dump the 'data' ok)
+
+* Currently no real support for taking 'incremental' backups, but could sort of fake it, as can specify 'WHERE' to only download certain rows. 
 
 
 ## Usage
 
-    php indexdump.php [-hhost] [-Pport] [query] [table] [limit] [--data=0] [--schema=0] [--lock=1] > dump.sql
+    php indexdump.php [-hhost] [-Pport] [query] [table] [limit] [--data=0] [--schema=0] [--lock=1] [--tsv=dump.tsv.gz] > dump.sql
 
 Examples:
 
-    php indexdump.php index 100
+    php indexdump.php index 100 > dump.sql
+
     # 100 rows from index
 
-    php indexdump.php -hmaster.domain.com \"select * from table where title != 'Other'\"
+    php indexdump.php -hmaster.domain.com \"select * from table where title != 'Other'\" > dump.sql
+
     # runs the full query against a specific index - dumping all rows. - you CAN use MATCH(..)
     # NOTE: should NOT add ORDER BY nor LIMIT to the query, as this script needs to add them to dump all rows (because of max_matches)
 
@@ -53,8 +60,14 @@ Examples:
 
 * [--data=0] [--schema=0] can optionally turn off dumping of data and/or schema seperatly
 
-* [--lock=1] when dumping, adds 'LOCK index' to lock the index in searchd. Note that the LOCK command in manticoresearch, is a physical lock (prevents writes to teh file) it does NOT prevent other threads doing INSERT/DELETE/UPDATE etc) - so no garentee of index onconsistency in the dump
+* [--lock=1] when dumping, adds 'LOCK index' to lock the index in searchd. 
+    Note that the LOCK command in manticoresearch, is a physical lock (prevents writes to teh file) it does NOT prevent other threads doing INSERT/DELETE/UPDATE etc) - so no garentee of index consistency in the dump
 
+* [--tsv=<filename>] creates a GZ compressed Tab Seperated Value dump of the index data (in addition, not instead of the SQL dump output on stdout)
+
+... normally you would pipe the output direct to a file. To compress, pipe it via gzip
+
+    indexdump.php index | gzip > index.sql.gz
 
 ## Restoring
 
