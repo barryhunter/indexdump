@@ -104,3 +104,38 @@ This script was originally based on code from https://github.com/barryhunter/fak
 
 Also if looking for a physical backup, see the node.js tool, https://github.com/webigorkiev/indexbackup
 ... manticoresearch are also working on their own physical backup script. 
+
+## Test Script for Dump File Validation
+
+The `test_dump_validity.php` script is designed to test the `indexdump.php` utility. It automates the process of creating a test index in a Manticore Search server, using `indexdump.php` to generate a dump of this index, and then validating the contents of the dump file for correctness.
+
+### Prerequisites
+
+To run the test script, you will need:
+*   A PHP installation (e.g., PHP 7.3 or newer). This is required for both `test_dump_validity.php` and the `indexdump.php` script itself.
+*   A running Manticore Search server.
+*   The `mysqli` PHP extension must be installed and enabled in your PHP configuration.
+
+### Configuration
+
+*   The test script attempts to connect to Manticore Search at `127.0.0.1:9306` by default.
+*   You can override these defaults by setting the following environment variables before running the script:
+    *   `MANTICORE_HOST`: The hostname or IP address of your Manticore Search server.
+    *   `MANTICORE_PORT`: The Manticore Search SQL port (usually 9306).
+
+### How to Run
+
+Execute the script from the command line in the repository's root directory:
+```bash
+php test_dump_validity.php
+```
+
+### What it Does
+
+The script performs the following actions:
+1.  **Sets up a test index:** It creates a Real-Time (RT) index named `indexdump_test_rt` using the definitions in `test_setup.sql`. This includes a specific schema and sample data.
+2.  **Runs `indexdump.php`:** It executes `indexdump.php` to dump the `indexdump_test_rt` index.
+3.  **Validates SQL Syntax:** It performs a basic check on the generated dump to ensure it contains `CREATE TABLE` and `INSERT INTO` statements for the test index.
+4.  **Verifies Data Integrity:** It parses the `CREATE TABLE` statement to check for correct column definitions and parses all `INSERT INTO` statements to compare the dumped data row-by-row against the original sample data. This includes checking for correct handling of special characters in strings.
+5.  **Cleans Up:** After the validation, it drops the `indexdump_test_rt` index from the Manticore Search server.
+6.  **Reports Results:** The script will output "Test PASSED!" if all checks are successful. If any issues are found, it will print detailed error messages and exit with a non-zero status code.
