@@ -539,8 +539,14 @@ if ($p['dump-all-indexes']) {
 	}
 
 	$all_tables = array(); // Array to store all table names fetched from the server.
-	while ($row = mysqli_fetch_row($result)) {
-		$all_tables[] = $row[0];
+	while ($row = mysqli_fetch_assoc($result)) {
+		//no point backing up template & distributed
+       		// and 'local' are regeneratable anyway!
+
+        	if ($row['Type'] == 'rt' || $row['Type'] == 'percolate')
+			$all_tables[] = $row['Index'];
+		else
+			print "-- Skipping {$row['Index']} : {$row['Type']}\n";
 	}
 	mysqli_free_result($result);
 
