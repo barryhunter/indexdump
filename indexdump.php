@@ -58,12 +58,14 @@ function escape_tsv($in) {
  * @param array    $p_options        An associative array of options controlling the dump.
  *                                   Expected keys: 'schema' (true, false, 'mysql'), 'data' (true, false),
  *                                   'lock' (true, false), 'limit' (int or false).
+ * @param string|null $tsv_output_path Optional: Path to the file where TSV data should be written.
+ *                                     If null, TSV output is skipped.
  * @return bool    True on successful completion of the dump for this table, 
  *                 false on handled errors where an exception wasn't thrown (rare).
  * @throws Exception On critical errors during the dump process, such as failed SQL queries,
  *                   which prevent the dump from proceeding for this table.
  */
-function dump_index($db_connection, $table_name_param, $output_handle, $p_options) {
+function dump_index($db_connection, $table_name_param, $output_handle, $p_options, $tsv_output_path = null) {
 	$func_start_time = microtime(true);
 	// $table_name_param is the specific table to dump in this function call.
 	// $p_options for schema, data, lock, limit etc.
@@ -207,12 +209,20 @@ function dump_index($db_connection, $table_name_param, $output_handle, $p_option
 	######################################
 	# data
 	if (!empty($p_options['data'])) {
-		// Note: $p_options['tsv'] is not handled in this refactoring for simplicity, assume SQL output.
-		// if (!empty($p_options['tsv'])) { $h = gzopen($p_options['tsv'],'w'); }
+		$tsv_fh = null; // Initialize TSV file handle
+		// Check if TSV output is requested and a valid path is provided
+		if (is_string($tsv_output_path) && !empty($tsv_output_path)) {
+			$tsv_fh = @fopen($tsv_output_path, 'w'); // Use @ to suppress default PHP warning, we'll handle it
+			if (!$tsv_fh) {
+				fwrite(STDERR, "Error: Could not open TSV file for writing: $tsv_output_path. TSV output will be skipped.\n");
+				// $tsv_fh remains null, so TSV operations below will be skipped.
+			}
+		}
 
 		if (!empty($p_options['lock'])) {
 			if (!mysqli_query($db_connection, "LOCK TABLES `{$table_name_param}` READ")) {
 				fwrite(STDERR, "Warning: Failed to lock table `{$table_name_param}`: " . mysqli_error($db_connection) . "\n");
+				// Continue even if lock fails, as per original behavior
 			}
 		}
 
@@ -260,12 +270,14 @@ function dump_index($db_connection, $table_name_param, $output_handle, $p_option
 
 			fwrite($output_handle, "-- dumping ".$num_rows_in_batch." rows from `$table_name_param` (total: ".($total_rows_dumped + $num_rows_in_batch).")\n\n");
 
-			$names = array();
+			$names = array(); // For SQL INSERT statements (quoted)
+			$plain_names = array(); // For TSV header (raw field names)
 			$types = array();
 			$result_fields = mysqli_fetch_fields($result);
 
 			foreach ($result_fields as $key => $obj) {
-				$names[] = "`{$obj->name}`"; // Quote column names
+				$names[] = "`{$obj->name}`"; 
+				$plain_names[] = $obj->name; // Store raw name for TSV header
 				switch($obj->type) {
 					case MYSQLI_TYPE_INT24 :
 					case MYSQLI_TYPE_LONG :
@@ -285,9 +297,21 @@ function dump_index($db_connection, $table_name_param, $output_handle, $p_option
 						$types[] = 'other'; break;
 				}
 			}
-			mysqli_free_result($result_fields); // Free fields object if it's a resource, depends on PHP version
+			// mysqli_free_result($result_fields); // This was incorrect, mysqli_fetch_fields returns array of objects
 
+			// Write TSV header if TSV file is open and header not yet written
+			if ($tsv_fh && $total_rows_dumped == 0) { // Only write header once
+				$header_row_values = array_map('escape_tsv', $plain_names);
+				if (@fwrite($tsv_fh, implode("\t", $header_row_values) . "\n") === false) {
+					fwrite(STDERR, "Error writing TSV header to: $tsv_output_path. Further TSV output for this table will be skipped.\n");
+					fclose($tsv_fh); // Close on error
+					$tsv_fh = null;  // Stop further TSV attempts for this table
+				}
+			}
+			
+			// Process rows for SQL and TSV
 			while($row = mysqli_fetch_row($result)) {
+				// SQL Output (existing logic)
 				fwrite($output_handle, "INSERT INTO `{$table_name_param}` (" . implode(",", $names) . ") VALUES (");
 				$sep = '';
 				foreach($row as $idx => $value) {
@@ -298,23 +322,37 @@ function dump_index($db_connection, $table_name_param, $output_handle, $p_option
 					elseif ($types[$idx] != 'int' && $types[$idx] != 'real')
 						$value_str = "'".mysqli_real_escape_string($db_connection, $value)."'";
 					else
-						$value_str = $value; // Numeric types don't need quotes
+						$value_str = $value; 
 					fwrite($output_handle, $sep . $value_str);
 					$sep = ',';
 				}
 				fwrite($output_handle, ");\n");
-				// TSV output not handled in this refactor
-				// if (!empty($p_options['tsv'])) { ... }
-				$lastid = $row[0]; // Assuming 'id' is always the first column for pagination
+
+				// TSV Output
+				if ($tsv_fh) { // Check if TSV file handle is still valid
+					$tsv_row_values = array_map('escape_tsv', $row);
+					if (@fwrite($tsv_fh, implode("\t", $tsv_row_values) . "\n") === false) {
+						fwrite(STDERR, "Error writing TSV data row to: $tsv_output_path. Further TSV output for this table will be skipped.\n");
+						fclose($tsv_fh); // Close on error
+						$tsv_fh = null;  // Stop further TSV attempts
+					}
+				}
+				
+				$lastid = $row[0]; 
 			}
 			mysqli_free_result($result);
 			$total_rows_dumped += $num_rows_in_batch;
 
-			if ($num_rows_in_batch < $current_batch_limit) break; // Got less than requested, so must be the end for this table.
-			if (!empty($p_options['limit']) && $total_rows_dumped >= $p_options['limit']) break; // Reached specified limit
+			if ($num_rows_in_batch < $current_batch_limit) break; 
+			if (!empty($p_options['limit']) && $total_rows_dumped >= $p_options['limit']) break; 
 		}
 
 		if (!empty($p_options['lock'])) mysqli_query($db_connection, "UNLOCK TABLES");
+		
+		// Close TSV file handle if it was opened and is still valid
+		if ($tsv_fh) {
+			fclose($tsv_fh);
+		}
 	}
 	######################################
 	$func_end_time = microtime(true);
@@ -333,9 +371,9 @@ $p = array(
 	'P'=> 9306,
 	'select' => null, // Will be populated if user provides a specific query
 	'table' => null,  // Will be populated by arg parser or inferred
-	'limit'=>false, 
+	'limit'=>false,
 	'dump-all-indexes'=>false,
-	// 'tsv'=>false, // TSV option not part of this refactor focus
+	'tsv'=>null,      // Path for TSV output, or true if flag for dump-all-indexes
 );
 
 ######################################
@@ -354,12 +392,29 @@ if (count($argv) > 1) {
 				$key = trim($argv[$i],' -');
 				if ($key == 'dump-all-indexes') {
 					$value = true;
+				} elseif ($key == 'tsv') {
+					// Check if a value is provided for --tsv and it's not another option
+					if (isset($argv[$i+1]) && strpos($argv[$i+1], '-') !== 0 && !is_numeric($argv[$i+1])) {
+						$value = $argv[++$i]; // Assign filename
+					} else {
+						$value = true; // Set as flag
+					}
 				} else {
-					$value = $argv[++$i];
+					// Default behavior: next argument is the value
+					// Ensure $argv[$i+1] exists before assigning, to prevent error if option is last
+					if (isset($argv[$i+1])) {
+						$value = $argv[++$i];
+					} else {
+						// If option is last and expects a value, this could be an error or handled by specific option logic later
+						// For now, assign true, consistent with boolean flags if no value given
+						$value = true; 
+					}
 				}
 			}
 			$p[$key] = $value;
-		} elseif (is_numeric($argv[$i])) {
+		} elseif (is_numeric($argv[$i]) && empty($s) && !$p['table'] && !$p['select']) { 
+            // Capture limit if it's the first positional argument or after only options.
+            // This helps differentiate it from being a value for an option if --tsv was last.
 			$p['limit'] = $argv[$i];
 		} else {
 			$s[] = $argv[$i];
@@ -409,11 +464,17 @@ Options:
   --schema=<0|1|mysql> Dump schema. 0=no, 1=yes (Manticore RT format), 'mysql'=MySQL compatible (default: 1).
   --data=<0|1>         Dump data as INSERT statements. 0=no, 1=yes (default: 1).
   --lock=<0|1>         Lock table during data dump. 0=no, 1=yes (default: 0).
+  --tsv[=filename.tsv] Output data in TSV format.
+                       - For single index dump: `--tsv=filename.tsv` outputs data to `filename.tsv`.
+                         If schema is also dumped, it goes to STDOUT or the .sql file as usual.
+                       - With `--dump-all-indexes`: Use just `--tsv` (no filename). This creates an
+                         `index_name.tsv` file for each dumped index in the dated directory,
+                         alongside its `.sql` file. Any filename given (e.g., --tsv=file) is ignored.
   --dump-all-indexes   Dump all indexes found on the server.
                        - Creates a dated directory (e.g., index_dumps_YYYY-MM-DD).
-                       - Each index is dumped into its own .sql file within this directory.
+                       - Each index is dumped into its own .sql (and optionally .tsv) file.
                        - Positional arguments like [index_name], [query], [limit] are IGNORED.
-                       - Options like --schema, --data, --lock apply to each individual dump.
+                       - Options like --schema, --data, --lock, --tsv (as flag) apply to each dump.
                        - A summary of total, successful, and failed dumps is printed at the end.
   --d                  Debug: print parsed parameters and exit.
 
@@ -423,11 +484,13 @@ Examples:
     # Dumps schema and data for 'my_rt_index' to STDOUT.
   php indexdump.php my_rt_index 100
     # Dumps schema and 100 rows of data for 'my_rt_index'.
-  php indexdump.php -P9308 "SELECT * FROM my_other_index WHERE group_id=5" my_other_index
-    # Runs a custom query, outputs to STDOUT. CREATE TABLE will use 'my_other_index'.
+  php indexdump.php -P9308 "SELECT * FROM my_other_index WHERE group_id=5" my_other_index --tsv=custom.tsv
+    # Runs a custom query, outputs SQL to STDOUT, and TSV data to 'custom.tsv'.
   php indexdump.php --dump-all-indexes -hdb.example.com --schema=mysql --data=0
     # Dumps only MySQL-compatible schemas for all indexes from db.example.com
-    # into a directory like 'index_dumps_2023-10-27'.
+    # into a directory like 'index_dumps_YYYY-MM-DD', no .tsv files.
+  php indexdump.php --dump-all-indexes --tsv
+    # Dumps all indexes as .sql and .tsv files into the dated directory.
 ");
 }
 
@@ -539,15 +602,35 @@ if ($p['dump-all-indexes']) {
 			$current_p_options['select'] = "select * from `{$table_name_loop}`"; // Base select for this table.
 			// Note: $current_p_options['limit'] will use the global --limit if set.
 			// If a global limit is not desired for --dump-all-indexes, set $current_p_options['limit'] = false here.
+			
+			// Determine TSV output path for --dump-all-indexes mode
+			$current_tsv_path = null;
+			if ($p['tsv'] === true) { // --tsv flag is active for dump-all-indexes
+				// $sanitized_table_name is from the current loop iteration
+				$current_tsv_path = $dump_dir . '/' . $sanitized_table_name . '.tsv';
+			}
+			// If $p['tsv'] is a string (filename specified by user), it's ignored in --dump-all-indexes mode, 
+			// and $current_tsv_path will remain null unless $p['tsv'] was specifically 'true'.
 
 			// Call the core dump_index function.
-			if (dump_index($db, $table_name_loop, $fh, $current_p_options)) {
-				fwrite(STDOUT, "Successfully dumped `$table_name_loop` to `$output_file_path`.\n");
-				$successful_dumps++; // Increment success counter.
+			if (dump_index($db, $table_name_loop, $fh, $current_p_options, $current_tsv_path)) {
+				$success_message = "Successfully dumped SQL for `$table_name_loop` to `$output_file_path`";
+                if ($current_tsv_path && file_exists($current_tsv_path) && filesize($current_tsv_path) > 0) {
+                    $success_message .= " and TSV to `$current_tsv_path`";
+                } elseif ($p['tsv'] === true) { // --tsv was flagged but file might be empty/not created
+                     $success_message .= ". TSV output was requested";
+                     if ($current_tsv_path) {
+                        $success_message .= " to `$current_tsv_path`";
+                     }
+                     $success_message .= " (file may be empty if no data or if TSV writing failed)";
+                }
+                $success_message .= ".\n";
+                fwrite(STDOUT, $success_message);
+				$successful_dumps++; 
 			} else {
-				// This case is reached if dump_index returns false (a handled error not throwing an exception).
-				fwrite(STDERR, "Failed to dump `$table_name_loop` to `$output_file_path` (dump_index returned false).\n");
-				$failed_dumps++; // Increment failed counter.
+				// This case might be less common if dump_index throws exceptions for most errors
+				fwrite(STDERR, "Failed to dump SQL for `$table_name_loop` to `$output_file_path` (dump_index returned false).\n");
+				$failed_dumps++; 
 			}
 		} catch (Exception $e) {
 			// Catch any exceptions thrown by dump_index (e.g., SQL errors).
@@ -580,8 +663,23 @@ if ($p['dump-all-indexes']) {
 	}
 
 	try {
-		if (dump_index($db, $p['table'], STDOUT, $p)) {
+		// Determine the TSV output path for single dump mode.
+		// $p['tsv'] holds the filename if --tsv=filename.tsv was used,
+		// or true if --tsv was used as a flag, or null if not used.
+		// dump_index expects a string path or null. If $p['tsv'] is true (flag mode),
+		// we should pass null for single dump, as a filename is required.
+		$single_tsv_path = is_string($p['tsv']) ? $p['tsv'] : null;
+
+		if ($p['tsv'] === true && !is_string($single_tsv_path)) {
+			fwrite(STDERR, "Notice: --tsv used as a flag in single dump mode. TSV output will be skipped as a filename is required (e.g., --tsv=output.tsv).\n");
+		}
+
+		if (dump_index($db, $p['table'], STDOUT, $p, $single_tsv_path)) {
 			// Success message is part of dump_index for individual tables
+			if ($single_tsv_path && file_exists($single_tsv_path) && filesize($single_tsv_path) > 0) {
+				// Provide confirmation that TSV was also written, to STDERR for visibility alongside other messages.
+				fwrite(STDERR, "TSV data for `{$p['table']}` also written to `{$single_tsv_path}`.\n");
+			}
 		} else {
 			// This case might be less common if dump_index throws exceptions
 			fwrite(STDERR, "An error occurred during the dump of table `{$p['table']}` (dump_index returned false).\n");
