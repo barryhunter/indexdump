@@ -157,15 +157,17 @@ function dump_index($db_connection, $table_name_param, $output_handle, $p_option
 					// For distributed indexes, describe the agent might be needed, complex case.
 					// Original script re-ran describe on agent, for now, keep it simple.
 					// This part might need more robust handling for distributed setups.
-					$agent_describe_result = mysqli_query($db_connection,"DESCRIBE `{$row['Agent']}`");
-					if ($agent_describe_result) {
-						$row = mysqli_fetch_assoc($agent_describe_result);
-						mysqli_free_result($agent_describe_result);
+					mysqli_free_result($describe_result); //cancel the old one!
+					$describe_result = mysqli_query($db_connection,"DESCRIBE `{$row['Agent']}`");
+					if ($describe_result) {
+						$row = mysqli_fetch_assoc($describe_result);
 					} else {
 						fwrite(STDERR, "Warning: Could not describe agent `{$row['Agent']}` for distributed index `{$table_name_param}`.\n");
 					}
 				}
-
+				if (!isset($row['Properties']))
+				        $row['Properties'] = ''; //old servers didnt have this. this is just to prevent notices
+				
 				if ($row['Field'] != 'id' && $row['Type'] != 'field') {
 					$create_table_stmt .= "$sep  `{$row['Field']}` ";
 					if ($row['Type'] == 'text' && $row['Properties'] == 'indexed stored')
