@@ -393,12 +393,7 @@ if (count($argv) > 1) {
 				if ($key == 'dump-all-indexes') {
 					$value = true;
 				} elseif ($key == 'tsv') {
-					// Check if a value is provided for --tsv and it's not another option
-					if (isset($argv[$i+1]) && strpos($argv[$i+1], '-') !== 0 && !is_numeric($argv[$i+1])) {
-						$value = $argv[++$i]; // Assign filename
-					} else {
-						$value = true; // Set as flag
-					}
+					$value = true; // Set as flag
 				} else {
 					// Default behavior: next argument is the value
 					// Ensure $argv[$i+1] exists before assigning, to prevent error if option is last
@@ -412,10 +407,6 @@ if (count($argv) > 1) {
 				}
 			}
 			$p[$key] = $value;
-		} elseif (is_numeric($argv[$i]) && empty($s) && !$p['table'] && !$p['select']) { 
-            // Capture limit if it's the first positional argument or after only options.
-            // This helps differentiate it from being a value for an option if --tsv was last.
-			$p['limit'] = $argv[$i];
 		} else {
 			$s[] = $argv[$i];
 		}
@@ -424,6 +415,11 @@ if (count($argv) > 1) {
 		$db = mysqli_connect($p['h'].':'.$p['P'],'','','') or die("unable to connect\n".mysqli_error($db)."\n");
 	}
 	if (!empty($s)) {
+		$last_arg = end($s);
+		if (is_numeric($last_arg)) { 
+            		$p['limit'] = array_pop($s);
+		}
+		
 		// If a query is provided as a non-option argument, it's $p['select']
 		// If a table name is provided, it's $p['table']
 		// If both, the last one usually wins for $p['select'] if it looks like a query.
@@ -438,9 +434,6 @@ if (count($argv) > 1) {
 		} elseif (count($s) > 1) {
 			$p['select'] = $s[0]; // First non-option is query
 			$p['table'] = $s[1];  // Second non-option is table
-			if (count($s) > 2 && is_numeric($s[2])) { // Third is limit
-				$p['limit'] = (int)$s[2];
-			}
 		}
 	}
 } else { // No arguments, or only options like -h
@@ -449,14 +442,14 @@ if (count($argv) > 1) {
 		die("
 Usage:
 php indexdump.php [-hhost] [-Pport] [--schema=<0|1|mysql>] [--data=<0|1>] [--lock=<0|1>] [index_name] [limit]
-php indexdump.php [-hhost] [-Pport] [--schema=<0|1|mysql>] [--data=<0|1>] [--lock=<0|1>] "SELECT_query" [table_name_for_create] [limit]
+php indexdump.php [-hhost] [-Pport] [--schema=<0|1|mysql>] [--data=<0|1>] [--lock=<0|1>] \"SELECT_query\" [table_name_for_create] [limit]
 php indexdump.php --dump-all-indexes [-hhost] [-Pport] [--schema=<0|1|mysql>] [--data=<0|1>] [--lock=<0|1>] [ignored_args...]
 
 Arguments (for single index dump):
   [index_name]         Name of the index to dump.
   [table_name_for_create] Optional: Name to use in CREATE TABLE if different from index_name or if using a custom query.
   [limit]              Optional: Limit the number of rows dumped.
-  "SELECT_query"       Custom SELECT query to dump specific data. If used, [index_name] might be needed for CREATE TABLE.
+  \"SELECT_query\"       Custom SELECT query to dump specific data. If used, [index_name] might be needed for CREATE TABLE.
 
 Options:
   -h<host>             Connect to host.
@@ -484,7 +477,7 @@ Examples:
     # Dumps schema and data for 'my_rt_index' to STDOUT.
   php indexdump.php my_rt_index 100
     # Dumps schema and 100 rows of data for 'my_rt_index'.
-  php indexdump.php -P9308 "SELECT * FROM my_other_index WHERE group_id=5" my_other_index --tsv=custom.tsv
+  php indexdump.php -P9308 \"SELECT * FROM my_other_index WHERE group_id=5\" my_other_index --tsv=custom.tsv
     # Runs a custom query, outputs SQL to STDOUT, and TSV data to 'custom.tsv'.
   php indexdump.php --dump-all-indexes -hdb.example.com --schema=mysql --data=0
     # Dumps only MySQL-compatible schemas for all indexes from db.example.com
@@ -492,6 +485,7 @@ Examples:
   php indexdump.php --dump-all-indexes --tsv
     # Dumps all indexes as .sql and .tsv files into the dated directory.
 ");
+	}	
 }
 
 // Argument processing:
@@ -653,13 +647,6 @@ if ($p['dump-all-indexes']) {
 	// Wrapped in try-catch for consistency, as dump_index can throw exceptions.
 	if (empty($p['table'])) {
 		die("Error: No table name specified for single index dump. Use 'php indexdump.php <indexname>' or provide a query.\n");
-	}
-
-	// The $p['select'] would have been set by arg parser if a custom query was provided.
-	// If only a table name was provided, $p['select'] was already set to "select * from `{$p['table']}`".
-	// If $p['select'] is still null here, it implies an issue with argument parsing or logic for single table.
-	if (empty($p['select'])) {
-		 $p['select'] = "select * from `{$p['table']}`";
 	}
 
 	try {
